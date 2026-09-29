@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wiki Race Bench</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --card: #ffffff; --ink: #1c1c1a; --muted: #6b6a66; --line: #e3e1da;
+    --jev: #0f766e; --claude: #b45309; --gpt: #1d4ed8; --ok: #15803d; --bad: #b91c1c;
+    --hl: #fde68a; --hl-strong: #f59e0b; --cand: #bfdbfe;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141413; --card: #1e1e1c; --ink: #ece9e1; --muted: #9c9a92; --line: #33322f;
+      --hl: #78350f; --hl-strong: #f59e0b; --cand: #1e3a8a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, sans-serif; }
+  header { padding: 16px 16px 4px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  header p { margin: 0; color: var(--muted); font-size: 14px; }
+  .controls { margin: 10px 0; padding: 0 16px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font-size: 14px; width: 100%; }
+  .controls input[type=text] { flex: 1 1 200px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font-size: 15px; }
+  .controls label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  button { padding: 9px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font-size: 14px; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { color: #fff; border-color: transparent; }
+  #msg { color: var(--bad); font-size: 13px; min-height: 1em; flex-basis: 100%; }
+  .panel { display: none; } .panel.active { display: block; }
+
+  .main { display: grid; grid-template-columns: 380px 1fr; gap: 12px; padding: 0 16px 16px; height: calc(100vh - 200px); min-height: 520px; }
+  @media (max-width: 900px) { .main { grid-template-columns: 1fr; height: auto; } }
+  .lanes { display: flex; flex-direction: column; gap: 10px; overflow: auto; }
+  .lane { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; cursor: pointer; }
+  .lane.watched { outline: 2px solid var(--hl-strong); }
+  .lane h2 { margin: 0; font-size: 15px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .lane[data-lane="jev"] h2 span.dot { background: var(--jev); } .lane[data-lane="jev"] button.primary { background: var(--jev); }
+  .lane[data-lane="claude"] h2 span.dot { background: var(--claude); } .lane[data-lane="claude"] button.primary { background: var(--claude); }
+  .lane[data-lane="gpt"] h2 span.dot { background: var(--gpt); } .lane[data-lane="gpt"] button.primary { background: var(--gpt); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .status { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .status.won { color: var(--ok); } .status.error, .status.stuck, .status.max_steps { color: var(--bad); }
+  .row { display: flex; gap: 6px; }
+  .row select { flex: 1; } .row button { flex: 0 0 auto; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; }
+  .stat b { display: block; font-size: 14px; font-family: var(--mono); }
+  .stat small { color: var(--muted); font-size: 11px; }
+  .path { font-size: 12px; color: var(--muted); }
+  .path strong { color: var(--ink); }
+  .log { max-height: 150px; overflow: auto; border-top: 1px solid var(--line); padding-top: 6px; font-family: var(--mono); font-size: 11px; display: flex; flex-direction: column; gap: 4px; }
+  .ev { padding: 5px 7px; border-radius: 6px; background: color-mix(in srgb, var(--line) 40%, transparent); }
+  .ev .meta, .ev .alts { color: var(--muted); }
+  .ev.win { border-left: 3px solid var(--ok); } .ev.bad { border-left: 3px solid var(--bad); }
+
+  .stage { display: grid; grid-template-rows: auto 1fr; gap: 10px; min-height: 0; }
+  .stagebar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+  .stagebar b { color: var(--ink); }
+  .legend span { display: inline-block; padding: 1px 6px; border-radius: 4px; margin-right: 6px; }
+  .legend .l-cand { background: var(--cand); } .legend .l-chosen { background: var(--hl-strong); color: #fff; }
+  .panes { display: grid; grid-template-columns: 1fr 340px; gap: 10px; min-height: 0; }
+  @media (max-width: 1200px) { .panes { grid-template-columns: 1fr; } }
+  .browser, .brain { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: auto; min-height: 0; }
+  .browser { padding: 18px 22px; font-family: Georgia, serif; font-size: 14px; line-height: 1.5; }
+  .browser h1.title { font-family: Georgia, serif; font-size: 24px; border-bottom: 1px solid var(--line); margin: 0 0 12px; padding-bottom: 6px; }
+  .browser a { color: #2563eb; text-decoration: none; pointer-events: none; }
+  .browser a.cand { background: var(--cand); border-radius: 3px; padding: 0 2px; }
+  .browser a.chosen { background: var(--hl-strong); color: #fff; padding: 0 3px; border-radius: 3px; font-weight: 600; }
+  .browser a.top { outline: 2px dashed var(--hl-strong); }
+  .browser img { max-width: 100%; height: auto; }
+  .browser .mw-empty-elt, .browser .mw-editsection { display: none; }
+  .brain { padding: 12px; font-size: 13px; display: flex; flex-direction: column; gap: 10px; }
+  .brain h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .bar { display: grid; grid-template-columns: 1fr 48px; gap: 6px; align-items: center; font-size: 12px; margin: 2px 0; }
+  .bar .track { height: 8px; background: color-mix(in srgb, var(--line) 60%, transparent); border-radius: 4px; overflow: hidden; }
+  .bar .fill { height: 100%; background: var(--hl-strong); }
+  .bar .name { grid-column: 1 / -1; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  pre { margin: 0; font-family: var(--mono); font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: color-mix(in srgb, var(--line) 40%, transparent); padding: 8px; border-radius: 6px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+
+  .summary { padding: 0 16px 32px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+  td.num { font-family: var(--mono); text-align: right; } th.num { text-align: right; }
+  .note { color: var(--muted); font-size: 13px; }
+  .glossary { margin-top: 16px; max-width: 900px; }
+  .glossary h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+  .glossary dl { display: grid; grid-template-columns: 120px 1fr; gap: 6px 12px; font-size: 13px; margin: 0; }
+  .glossary dt { font-weight: 600; } .glossary dd { margin: 0; color: var(--muted); }
+  @media (max-width: 600px) { .glossary dl { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Wiki Race Bench</h1>
+  <p>One Wikipedia race, three decision APIs. Same start, same destination, same rules. One race at a time. Click a lane to watch it. Keys stay on the local server.</p>
+</header>
+
+<section class="panel active" data-panel="wiki">
+<div class="controls">
+  <input type="text" id="start" placeholder="Start article" value="Chess">
+  <input type="text" id="dest" placeholder="Destination article" value="Sabarmati Ashram">
+  <button id="random">Random pair</button>
+  <button id="reset">Reset</button>
+  <label title="Pause after each decision so you can see the chosen link and the probabilities before the page moves on. Affects Wall time only, never API time. Set to 0 for a timed run.">Watch delay <input type="range" id="delay" min="0" max="4" step="0.5" value="1.5"> <span id="delayv">1.5 s</span></label>
+  <div id="msg"></div>
+</div>
+
+<div class="main">
+  <div class="lanes" id="lanes"></div>
+  <div class="stage">
+    <div class="stagebar">
+      <span>Watching <b id="watch-lane">nothing</b></span>
+      <span>On <b id="watch-article">–</b></span>
+      <span class="legend"><span class="l-cand">candidate link</span><span class="l-chosen">chosen</span></span>
+    </div>
+    <div class="panes">
+      <div class="browser" id="browser"><p class="note">Start a lane. The article it is on appears here, with the 28 links it was offered highlighted and the one it clicked in orange.</p></div>
+      <div class="brain" id="brain"><h3>What the model saw</h3><p class="note">Nothing yet.</p></div>
+    </div>
+  </div>
+</div>
+
+
+<div class="summary">
+  <table id="table">
+    <thead><tr><th>Navigator</th><th title="won, stuck, max_steps or error">Outcome</th><th class="num" title="Articles moved through, start excluded">Hops</th><th class="num" title="Model calls made, including hops that were retried or backtracked">Calls</th><th class="num" title="Sum of model response times only. The fair speed column.">API time</th><th class="num" title="Clock time for the whole race: model time plus Wikipedia fetches, watch delay and any 429 back-off">Wall</th><th class="num" title="Model cost only, from list prices per token">Cost</th><th class="num" title="Average confidence across decisions. See the glossary below for what confidence means per lane.">Mean conf</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="glossary">
+    <h3>Reading the numbers</h3>
+    <dl>
+      <dt>API time</dt><dd>The sum of the model's response times across all calls. Nothing else is included. This is the fair column for comparing speed.</dd>
+      <dt>Wall</dt><dd>Clock time from Start to finish. Includes API time plus every Wikipedia fetch (two per hop), the watch delay you set, and any wait when Wikipedia rate-limits with a 429. It tells you how long the race felt, not how fast the model was.</dd>
+      <dt>Watch delay</dt><dd>A pause after each decision, for viewing only, so you can see the chosen link and the probabilities before the page moves on. It adds to Wall and to nothing else. Set it to 0 for a timed run, 3 or 4 seconds to narrate.</dd>
+      <dt>Calls</dt><dd>How many times the model was asked. Usually equals hops. It is higher when a chosen link looped back, was skipped, or the lane backtracked.</dd>
+      <dt>Cost</dt><dd>Model cost only, computed from list prices per token. Wikipedia is free.</dd>
+      <dt>Conf on Jev</dt><dd>Computed from the shape of the probability distribution the model returns. Probability concentrated on one link means high confidence, spread across several means low. The model is trained so these probabilities match outcomes.</dd>
+      <dt>Conf on Claude</dt><dd>A number between 0 and 1 the model wrote in its JSON answer when asked how sure it was. The API exposes no probabilities, so this is the model's opinion of itself.</dd>
+      <dt>Conf on GPT</dt><dd>The probability of the answer string, measured from token logprobs. Because the answer is forced into a JSON schema, this collapses to about 1.00 and is not a useful signal. The self-reported number is shown in brackets when it differs. GPT-5 models refuse logprobs, so they fall back to self-reported only.</dd>
+      <dt>Mean conf</dt><dd>Average of the per-decision confidence for that lane. The three lanes measure different things, so do not compare this column across lanes.</dd>
+    </dl>
+  </div>
+</div>
+
+</section>
+
+
+<script>
+const LANES = ["jev", "claude", "gpt"];
+const lanesEl = document.getElementById("lanes");
+const msgEl = document.getElementById("msg");
+const browserEl = document.getElementById("browser");
+const brainEl = document.getElementById("brain");
+let latest = null;
+let watched = null;
+let shown = { lane: null, article: null, decisionIndex: -1 };
+const articleCache = new Map();
+
+document.getElementById("delay").addEventListener("input", e => { document.getElementById("delayv").textContent = e.target.value + " s"; });
+
+function laneCard(lane) {
+  const el = document.createElement("section");
+  el.className = "lane"; el.dataset.lane = lane;
+  el.innerHTML = `
+    <h2><span><span class="dot"></span><span class="label"></span></span><span class="status">idle</span></h2>
+    <div class="row"><select class="model"></select><button class="primary start">Start</button></div>
+    <div class="stats">
+      <div class="stat"><b class="hops">0</b><small>hops</small></div>
+      <div class="stat" title="Model calls, including retried or backtracked hops"><b class="calls">0</b><small>calls</small></div>
+      <div class="stat" title="Sum of model response times only"><b class="api">0 ms</b><small>API time</small></div>
+      <div class="stat" title="Model cost only, from list prices"><b class="cost">$0</b><small>cost</small></div>
+    </div>
+    <div class="path"></div>
+    <div class="log"></div>`;
+  el.querySelector(".start").addEventListener("click", ev => { ev.stopPropagation(); startLane(lane); });
+  el.addEventListener("click", () => { watched = lane; shown = { lane: null, article: null, decisionIndex: -1 }; if (latest) render(latest); });
+  return el;
+}
+LANES.forEach(l => lanesEl.appendChild(laneCard(l)));
+
+async function api(path, body) {
+  const res = await fetch(path, { method: body ? "POST" : "GET", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+async function startLane(lane) {
+  msgEl.textContent = "";
+  const model = lanesEl.querySelector(`[data-lane="${lane}"] .model`).value;
+  const delay = Number(document.getElementById("delay").value);
+  try {
+    await api("/api/start", { lane, model, delay, start: document.getElementById("start").value, dest: document.getElementById("dest").value });
+    watched = lane; shown = { lane: null, article: null, decisionIndex: -1 };
+  } catch (e) { msgEl.textContent = e.message; }
+}
+
+document.getElementById("random").addEventListener("click", async () => {
+  msgEl.textContent = "Finding a connected random pair...";
+  try {
+    const p = await api("/api/random", {});
+    document.getElementById("start").value = p.start;
+    document.getElementById("dest").value = p.dest;
+    msgEl.textContent = "";
+  } catch (e) { msgEl.textContent = e.message; }
+});
+document.getElementById("reset").addEventListener("click", async () => {
+  try { await api("/api/reset", {}); msgEl.textContent = ""; shown = { lane: null, article: null, decisionIndex: -1 }; } catch (e) { msgEl.textContent = e.message; }
+});
+
+const fmtMs = ms => ms >= 1000 ? (ms / 1000).toFixed(1) + " s" : ms + " ms";
+const fmtUsd = v => "$" + (v < 0.01 ? v.toFixed(5) : v.toFixed(3));
+const conf = v => v == null ? "n/a" : v.toFixed(2);
+const titleKey = t => decodeURIComponent(String(t || "")).replace(/_/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+
+function renderEvent(ev) {
+  const div = document.createElement("div");
+  div.className = "ev";
+  if (ev.kind === "loaded") {
+    div.innerHTML = `Loaded <strong>${ev.article}</strong> <span class="meta">${ev.links} links</span>`;
+  } else if (ev.kind === "decision") {
+    const alts = (ev.top_targets || []).map(t => `${t.title} ${(t.prob * 100).toFixed(0)}%`).join(" · ");
+    div.innerHTML = `#${ev.step} ${ev.article} → <strong>${ev.chosen ?? "none"}</strong>
+      <div class="meta">${ev.operation} · conf ${conf(ev.target_confidence)}${ev.self_reported_confidence != null && ev.self_reported_confidence !== ev.target_confidence ? " (says " + conf(ev.self_reported_confidence) + ")" : ""} · ${fmtMs(ev.latency_ms)} · ${fmtUsd(ev.cost_usd)} · ${ev.input_tokens} in</div>
+      <div class="alts">${alts}</div>`;
+  } else if (ev.kind === "moved") {
+    return null;
+  } else if (ev.kind === "backtrack") {
+    div.className += " bad"; div.textContent = `Backtracked to ${ev.article}`;
+  } else if (ev.kind === "skipped") {
+    div.className += " bad"; div.textContent = `Skipped ${ev.article}: ${ev.reason}`;
+  } else if (ev.kind === "loop") {
+    div.className += " bad"; div.textContent = `Loops back to ${ev.article}`;
+  } else if (ev.kind === "finished") {
+    div.className += ev.outcome === "won" ? " win" : " bad";
+    div.textContent = ev.outcome === "won" ? `Reached ${ev.path[ev.path.length - 1]}` : `${ev.outcome}${ev.error ? ": " + ev.error : ""}`;
+  } else {
+    div.textContent = JSON.stringify(ev);
+  }
+  return div;
+}
+
+function render(state) {
+  latest = state;
+  if (!watched && state.running) watched = state.running;
+  for (const lane of LANES) {
+    const data = state.lanes[lane];
+    const el = lanesEl.querySelector(`[data-lane="${lane}"]`);
+    el.classList.toggle("watched", lane === watched);
+    el.querySelector(".label").textContent = data.label;
+    const st = el.querySelector(".status");
+    st.textContent = data.status; st.className = "status " + data.status;
+    el.querySelector(".start").disabled = !!state.running;
+    const sel = el.querySelector(".model");
+    if (!sel.options.length) {
+      for (const m of data.models) { const o = document.createElement("option"); o.value = m; o.textContent = m; sel.appendChild(o); }
+      sel.value = data.model;
+    }
+    sel.disabled = !!state.running || data.models.length === 1;
+
+    const decisions = data.events.filter(e => e.kind === "decision");
+    const moved = data.events.filter(e => e.kind === "moved").length;
+    el.querySelector(".hops").textContent = moved;
+    el.querySelector(".calls").textContent = decisions.length;
+    el.querySelector(".api").textContent = fmtMs(decisions.reduce((a, e) => a + e.latency_ms, 0));
+    el.querySelector(".cost").textContent = fmtUsd(decisions.reduce((a, e) => a + e.cost_usd, 0));
+
+    const path = [];
+    for (const e of data.events) { if (e.kind === "loaded" || e.kind === "moved") path.push(e.article); }
+    el.querySelector(".path").innerHTML = path.length ? path.map((p, i) => i === path.length - 1 ? `<strong>${p}</strong>` : p).join(" → ") : "";
+
+    const log = el.querySelector(".log");
+    if (Number(log.dataset.count || 0) > data.events.length) { log.innerHTML = ""; log.dataset.count = 0; }
+    for (let i = Number(log.dataset.count || 0); i < data.events.length; i++) {
+      const node = renderEvent(data.events[i]);
+      if (node) log.appendChild(node);
+    }
+    log.dataset.count = data.events.length;
+    log.scrollTop = log.scrollHeight;
+  }
+  renderTable(state);
+  renderStage(state);
+}
+
+// The stage follows the watched lane: show the article of its latest decision,
+// highlight the candidates it was offered and the link it chose.
+async function renderStage(state) {
+  if (!watched) return;
+  const data = state.lanes[watched];
+  const decisions = data.events.map((e, i) => ({ e, i })).filter(x => x.e.kind === "decision");
+  const last = decisions[decisions.length - 1];
+  const loaded = data.events.find(e => e.kind === "loaded");
+  document.getElementById("watch-lane").textContent = `${data.label} (${data.model})`;
+
+  let article = last ? last.e.article : (loaded ? loaded.article : null);
+  const moves = data.events.filter(e => e.kind === "moved");
+  if (data.status === "won" && moves.length) article = moves[moves.length - 1].article;
+  document.getElementById("watch-article").textContent = article || "–";
+  if (!article) return;
+
+  const decisionIndex = last ? last.i : -1;
+  if (shown.lane === watched && shown.article === article && shown.decisionIndex === decisionIndex) return;
+  shown = { lane: watched, article, decisionIndex };
+
+  let html = articleCache.get(titleKey(article));
+  if (html == null) {
+    try { html = (await api(`/api/article?title=${encodeURIComponent(article)}`)).html; articleCache.set(titleKey(article), html); }
+    catch { html = "<p class='note'>Article not available.</p>"; }
+  }
+  browserEl.innerHTML = `<h1 class="title">${article}</h1>` + html;
+  for (const a of browserEl.querySelectorAll("a[href]")) {
+    const href = a.getAttribute("href") || "";
+    if (href.startsWith("/")) a.setAttribute("href", "https://en.wikipedia.org" + href);
+    else if (href.startsWith("//")) a.setAttribute("href", "https:" + href);
+  }
+  for (const img of browserEl.querySelectorAll("img[src^='//']")) img.src = "https:" + img.getAttribute("src");
+
+  const dec = last && last.e.article === article ? last.e : null;
+  if (dec) {
+    const cands = new Map((dec.candidates || []).map(c => [titleKey(c.title), c]));
+    const probs = dec.target_probabilities || {};
+    const chosen = titleKey(dec.chosen || "");
+    let first = null;
+    for (const a of browserEl.querySelectorAll("a[href*='wikipedia.org/wiki/']")) {
+      const key = titleKey(a.getAttribute("href").split("/wiki/")[1].split("#")[0]);
+      const c = cands.get(key);
+      if (!c) continue;
+      a.classList.add("cand");
+      const p = probs[c.ref];
+      if (p != null) a.title = `${c.ref}: ${(p * 100).toFixed(1)}%`;
+      if (key === chosen) { a.classList.add("chosen"); if (!first) first = a; }
+    }
+    if (first) first.scrollIntoView({ block: "center" });
+    else browserEl.scrollTop = 0;
+    renderBrain(dec);
+  } else if (last && data.status === "won") {
+    browserEl.scrollTop = 0;
+    renderBrain(last.e);
+  } else {
+    browserEl.scrollTop = 0;
+    brainEl.innerHTML = `<h3>What the model saw</h3><p class="note">Waiting for the first decision on ${article}.</p>`;
+  }
+}
+
+function renderBrain(dec) {
+  const names = new Map((dec.candidates || []).map(c => [c.ref, c.title]));
+  const ranked = Object.entries(dec.target_probabilities || {}).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const bars = ranked.map(([ref, p]) => `
+    <div class="bar"><span class="name">${ref === "none" ? "none" : (names.get(ref) || ref)}${ref === titleKey(dec.chosen) || names.get(ref) === dec.chosen ? " ◀" : ""}</span>
+      <div class="track"><div class="fill" style="width:${Math.max(1, p * 100)}%"></div></div><span>${(p * 100).toFixed(1)}%</span></div>`).join("");
+  const ops = Object.entries(dec.operation_probabilities || {}).map(([k, v]) => `${k} ${(v * 100).toFixed(0)}%`).join(" · ");
+  brainEl.innerHTML = `
+    <h3>What the model saw · step ${dec.step}</h3>
+    <div><b>Model</b> ${dec.model} · ${fmtMs(dec.latency_ms)} · ${dec.input_tokens} tokens in · ${fmtUsd(dec.cost_usd)}</div>
+    <div><b>Operation</b> ${ops}</div>
+    <div><b>Offered</b> ${(dec.candidates || []).length} links · <b>Chose</b> ${dec.chosen ?? "none"} · <b>Confidence</b> ${conf(dec.target_confidence)}${dec.self_reported_confidence != null && dec.self_reported_confidence !== dec.target_confidence ? " (self-reported " + conf(dec.self_reported_confidence) + ")" : ""}</div>
+    <h3>Link probabilities</h3>
+    <div>${bars || "<span class='note'>Only the chosen link is reported for this model.</span>"}</div>
+    <details><summary>Exact state sent to the model (JSON)</summary><pre>${escapeHtml(JSON.stringify(dec.state, null, 2))}</pre></details>`;
+}
+
+function escapeHtml(s) { return s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+
+function renderTable(state) {
+  const tbody = document.querySelector("#table tbody");
+  tbody.innerHTML = "";
+  for (const lane of LANES) {
+    const d = state.lanes[lane];
+    const s = d.summary;
+    const tr = document.createElement("tr");
+    if (!s) { tr.innerHTML = `<td>${d.label} <span class="note">${d.model}</span></td><td>${d.status}</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td>`; }
+    else {
+      const confs = s.hops.map(h => h.target_confidence).filter(v => v != null);
+      const mean = confs.length ? (confs.reduce((a, b) => a + b, 0) / confs.length).toFixed(2) : "n/a";
+      tr.innerHTML = `<td>${d.label} <span class="note">${s.model}</span></td><td>${s.outcome}</td><td class="num">${s.path.length - 1}</td><td class="num">${s.decisions}</td>
+        <td class="num">${fmtMs(s.total_latency_ms)}</td><td class="num">${fmtMs(s.wall_ms)}</td><td class="num">${fmtUsd(s.total_cost_usd)}</td><td class="num">${mean}</td>`;
+    }
+    tbody.appendChild(tr);
+  }
+}
+
+async function poll() {
+  try { render(await api("/api/state")); } catch (e) { msgEl.textContent = "Server unreachable: " + e.message; }
+  setTimeout(poll, latest && latest.running ? 400 : 1500);
+}
+poll();
+</script>
+</body>
+</html>
